@@ -14,24 +14,13 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": [
-    "dist",
-    "README.md"
-  ],
-  "engines": {
-    "node": ">=18"
-  },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=18" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test"
   },
-  "keywords": [
-    "money-pulse",
-    "payments",
-    "africa",
-    "mobile-money",
-    "payouts"
-  ],
+  "keywords": ["money-pulse", "payments", "africa", "mobile-money", "payouts"],
   "homepage": "https://docs.money-pulse.org",
   "repository": "https://github.com/Nocyl/money-pulse-node",
   "devDependencies": {

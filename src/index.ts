@@ -1,7 +1,5 @@
 /**
  * @moneypulse/node — Official Money-Pulse SDK
- *
- * Aligned with real backend routes (backend/src/routes/index.ts).
  * Zero runtime deps — uses native fetch (Node 18+).
  */
 import * as crypto from 'node:crypto';
@@ -17,21 +15,43 @@ export interface MoneyPulseConfig {
 }
 
 export class MoneyPulseError extends Error {
-  constructor(message: string, public status?: number, public code?: string, public raw?: unknown) {
+  constructor(
+    message: string,
+    public status?: number,
+    public code?: string,
+    public raw?: unknown
+  ) {
     super(message);
     this.name = 'MoneyPulseError';
   }
 }
-export class AuthenticationError extends MoneyPulseError { constructor(m: string, r?: unknown) { super(m, 401, 'authentication_error', r); this.name = 'AuthenticationError'; } }
-export class ValidationError extends MoneyPulseError    { constructor(m: string, r?: unknown) { super(m, 400, 'validation_error', r); this.name = 'ValidationError'; } }
-export class RateLimitError extends MoneyPulseError     { constructor(m: string, r?: unknown) { super(m, 429, 'rate_limited', r); this.name = 'RateLimitError'; } }
-export class NetworkError extends MoneyPulseError       { constructor(m: string, r?: unknown) { super(m, undefined, 'network_error', r); this.name = 'NetworkError'; } }
+
+export class AuthenticationError extends MoneyPulseError {
+  constructor(m: string, r?: unknown) { super(m, 401, 'authentication_error', r); this.name = 'AuthenticationError'; }
+}
+
+export class ValidationError extends MoneyPulseError {
+  constructor(m: string, r?: unknown) { super(m, 400, 'validation_error', r); this.name = 'ValidationError'; }
+}
+
+export class RateLimitError extends MoneyPulseError {
+  constructor(m: string, r?: unknown) { super(m, 429, 'rate_limited', r); this.name = 'RateLimitError'; }
+}
+
+export class NetworkError extends MoneyPulseError {
+  constructor(m: string, r?: unknown) { super(m, undefined, 'network_error', r); this.name = 'NetworkError'; }
+}
 
 export interface PaymentInitiateInput {
   amount: number;
   currency: string;
   country?: string;
-  customer: { phone?: string; email?: string; firstName?: string; lastName?: string };
+  customer: {
+    phone?: string;
+    email?: string;
+    firstName?: string;
+    lastName?: string;
+  };
   methodCode?: string;
   method?: string;
   description?: string;
@@ -39,18 +59,36 @@ export interface PaymentInitiateInput {
   returnUrl?: string;
   reference?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Clé unique identifiant cette requête. Générée automatiquement si
+   * omise. Fournissez la vôtre pour regrouper plusieurs tentatives d'une
+   * même opération logique sous une seule clé de déduplication.
+   */
+  idempotencyKey?: string;
 }
 
 export interface PayoutInitiateInput {
   amount: number;
   currency: string;
   country?: string;
-  recipient: { phone?: string; email?: string; firstName?: string; lastName?: string; accountNumber?: string; bankCode?: string };
+  recipient: {
+    phone?: string;
+    email?: string;
+    firstName?: string;
+    lastName?: string;
+    accountNumber?: string;
+    bankCode?: string;
+  };
   methodCode?: string;
   method?: string;
   reference?: string;
   description?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Clé unique identifiant cette requête. Générée automatiquement si
+   * omise.
+   */
+  idempotencyKey?: string;
 }
 
 export class MoneyPulse {
@@ -85,27 +123,41 @@ export class MoneyPulse {
     this.webhooks = new WebhooksHelper();
   }
 
-  async request<T = any>(method: string, path: string, body?: unknown, query?: Record<string, unknown>): Promise<T> {
+  async request<T = any>(
+    method: string,
+    path: string,
+    body?: unknown,
+    query?: Record<string, unknown>,
+    idempotencyKey?: string
+  ): Promise<T> {
     const url = new URL(this.baseUrl.replace(/\/+$/, '') + path);
-    if (query) for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+    if (query) {
+      for (const [k, v] of Object.entries(query)) {
+        if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+      }
+    }
 
     let lastErr: unknown;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'X-Api-Key': this.apiKey,
+          'X-SDK': '@moneypulse/node@2.0.3',
+          'User-Agent': '@moneypulse/node/2.0.3',
+        };
+        if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+
         const res = await fetch(url, {
           method,
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Api-Key': this.apiKey,
-            'X-SDK': '@moneypulse/node@0.1.0',
-            'User-Agent': '@moneypulse/node/0.1.0',
-          },
+          headers,
           body: body ? JSON.stringify(body) : undefined,
           signal: AbortSignal.timeout(this.timeoutMs),
         });
 
         const text = await res.text();
         const json = text ? safeJson(text) : null;
+
         if (!res.ok) {
           const msg = (json && (json.error || json.message)) || `HTTP ${res.status}`;
           if (res.status === 401) throw new AuthenticationError(msg, json);
@@ -117,6 +169,7 @@ export class MoneyPulse {
           }
           throw new MoneyPulseError(msg, res.status, json?.code, json);
         }
+
         return (json?.data ?? json) as T;
       } catch (err) {
         lastErr = err;
@@ -133,21 +186,42 @@ export class MoneyPulse {
 
 class PaymentsResource {
   constructor(private mp: MoneyPulse) {}
-  initiate(input: PaymentInitiateInput) { return this.mp.request('POST', '/payments/initiate', input); }
-  getStatus(transactionId: string) { return this.mp.request('GET', `/payments/${encodeURIComponent(transactionId)}/status`); }
-  list(query?: { page?: number; limit?: number; status?: string }) { return this.mp.request('GET', '/payments', undefined, query); }
-  notify(input: { transactionId: string; email: string }) { return this.mp.request('POST', '/payments/notify', input); }
+
+  /** Une clé d'idempotence est générée automatiquement si non fournie via input.idempotencyKey. */
+  initiate(input: PaymentInitiateInput) {
+    const { idempotencyKey, ...body } = input;
+    return this.mp.request('POST', '/payments/initiate', body, undefined, idempotencyKey || crypto.randomUUID());
+  }
+  getStatus(transactionId: string) {
+    return this.mp.request('GET', `/payments/${encodeURIComponent(transactionId)}/status`);
+  }
+  list(query?: { page?: number; limit?: number; status?: string }) {
+    return this.mp.request('GET', '/payments', undefined, query);
+  }
+  notify(input: { transactionId: string; email: string }) {
+    return this.mp.request('POST', '/payments/notify', input);
+  }
 }
 
 class PayoutsResource {
   constructor(private mp: MoneyPulse) {}
-  initiate(input: PayoutInitiateInput) { return this.mp.request('POST', '/payouts', input); }
-  list(query?: { page?: number; limit?: number; status?: string }) { return this.mp.request('GET', '/payouts', undefined, query); }
-  balance() { return this.mp.request('GET', '/payouts/balance'); }
+
+  /** Une clé d'idempotence est générée automatiquement si non fournie via input.idempotencyKey. */
+  initiate(input: PayoutInitiateInput) {
+    const { idempotencyKey, ...body } = input;
+    return this.mp.request('POST', '/payouts', body, undefined, idempotencyKey || crypto.randomUUID());
+  }
+  list(query?: { page?: number; limit?: number; status?: string }) {
+    return this.mp.request('GET', '/payouts', undefined, query);
+  }
+  balance() {
+    return this.mp.request('GET', '/payouts/balance');
+  }
 }
 
 class MethodsResource {
   constructor(private mp: MoneyPulse) {}
+
   list(query?: { country?: string; currency?: string; restrictedPhone?: string; restrictCountryCode?: string; type?: string }) {
     return this.mp.request('GET', '/utils/payment/methods', undefined, {
       country: query?.country,
@@ -161,24 +235,41 @@ class MethodsResource {
 
 class CustomersResource {
   constructor(private mp: MoneyPulse) {}
-  list(query?: { page?: number; limit?: number; search?: string }) { return this.mp.request('GET', '/customers', undefined, query); }
-  create(input: { firstName?: string; lastName?: string; email?: string; phone?: string }) { return this.mp.request('POST', '/customers', input); }
-  get(id: string) { return this.mp.request('GET', `/customers/${encodeURIComponent(id)}`); }
+
+  list(query?: { page?: number; limit?: number; search?: string }) {
+    return this.mp.request('GET', '/customers', undefined, query);
+  }
+  create(input: { firstName?: string; lastName?: string; email?: string; phone?: string }) {
+    return this.mp.request('POST', '/customers', input);
+  }
+  get(id: string) {
+    return this.mp.request('GET', `/customers/${encodeURIComponent(id)}`);
+  }
   update(id: string, input: Partial<{ firstName: string; lastName: string; email: string; phone: string }>) {
     return this.mp.request('PUT', `/customers/${encodeURIComponent(id)}`, input);
   }
-  delete(id: string) { return this.mp.request('DELETE', `/customers/${encodeURIComponent(id)}`); }
+  delete(id: string) {
+    return this.mp.request('DELETE', `/customers/${encodeURIComponent(id)}`);
+  }
 }
 
 class RefundsResource {
   constructor(private mp: MoneyPulse) {}
-  list() { return this.mp.request('GET', '/refunds'); }
-  create(input: { transactionId: string; amount?: number; reason?: string }) { return this.mp.request('POST', '/refunds', input); }
+
+  list() {
+    return this.mp.request('GET', '/refunds');
+  }
+  create(input: { transactionId: string; amount?: number; reason?: string }) {
+    return this.mp.request('POST', '/refunds', input);
+  }
 }
 
 class BalancesResource {
   constructor(private mp: MoneyPulse) {}
-  summary() { return this.mp.request('GET', '/balances/summary'); }
+
+  summary() {
+    return this.mp.request('GET', '/balances/summary');
+  }
 }
 
 export class WebhooksHelper {
@@ -196,8 +287,14 @@ export class WebhooksHelper {
   }
 }
 
-function safeJson(t: string): any { try { return JSON.parse(t); } catch { return null; } }
-function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
-function backoff(attempt: number) { return Math.min(2_000 * Math.pow(2, attempt), 10_000); }
+function safeJson(t: string): any {
+  try { return JSON.parse(t); } catch { return null; }
+}
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+function backoff(attempt: number): number {
+  return Math.min(2_000 * Math.pow(2, attempt), 10_000);
+}
 
 export default MoneyPulse;

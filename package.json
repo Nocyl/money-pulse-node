@@ -1,6 +1,6 @@
 {
   "name": "@moneypulse/node",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Official Money-Pulse SDK for Node.js / TypeScript",
   "license": "MIT",
   "type": "module",
@@ -14,16 +14,28 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist", "README.md"],
-  "engines": { "node": ">=18" },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && mv dist/cjs-tmp/index.js dist/index.cjs && rm -rf dist/cjs-tmp",
     "test": "node --test"
   },
-  "keywords": ["money-pulse", "payments", "africa", "mobile-money", "payouts"],
+  "keywords": [
+    "money-pulse",
+    "payments",
+    "africa",
+    "mobile-money",
+    "payouts"
+  ],
   "homepage": "https://docs.money-pulse.org",
   "repository": "https://github.com/Nocyl/money-pulse-node",
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
   }
 }

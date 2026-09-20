@@ -91,6 +91,40 @@ export interface PayoutInitiateInput {
   idempotencyKey?: string;
 }
 
+/**
+ * Moteur de facturation récurrente (abonnements + usage). Un "billing
+ * customer" représente un UTILISATEUR FINAL de votre propre application
+ * (ex. un vendeur qui utilise votre plateforme) -- pas un client de
+ * Money-Pulse. Voir la documentation `/billing` de l'API.
+ */
+export interface BillingPlanInput {
+  code: string;
+  name: string;
+  description?: string;
+  priceAmount: number;
+  priceCurrency: string;
+  billingInterval: 'monthly' | 'yearly';
+  trialDays?: number;
+  usageFeePercent?: number;
+}
+
+export interface BillingCustomerInput {
+  externalCustomerId: string;
+  email?: string;
+  phone?: string;
+  name?: string;
+  country: string;
+}
+
+export interface BillingUsageInput {
+  billingCustomerId: string;
+  subscriptionId?: string;
+  quantity: number;
+  unitAmount: number;
+  currency: string;
+  description?: string;
+}
+
 export class MoneyPulse {
   readonly apiKey: string;
   readonly environment: Environment;
@@ -104,6 +138,7 @@ export class MoneyPulse {
   customers: CustomersResource;
   refunds: RefundsResource;
   balances: BalancesResource;
+  billing: BillingResource;
   webhooks: WebhooksHelper;
 
   constructor(cfg: MoneyPulseConfig) {
@@ -120,6 +155,7 @@ export class MoneyPulse {
     this.customers = new CustomersResource(this);
     this.refunds = new RefundsResource(this);
     this.balances = new BalancesResource(this);
+    this.billing = new BillingResource(this);
     this.webhooks = new WebhooksHelper();
   }
 
@@ -143,8 +179,8 @@ export class MoneyPulse {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
           'X-Api-Key': this.apiKey,
-          'X-SDK': '@moneypulse/node@2.0.3',
-          'User-Agent': '@moneypulse/node/2.0.3',
+          'X-SDK': '@moneypulse/node@2.1.0',
+          'User-Agent': '@moneypulse/node/2.1.0',
         };
         if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
 
@@ -209,7 +245,7 @@ class PayoutsResource {
   /** Une clé d'idempotence est générée automatiquement si non fournie via input.idempotencyKey. */
   initiate(input: PayoutInitiateInput) {
     const { idempotencyKey, ...body } = input;
-    return this.mp.request('POST', '/payouts', body, undefined, idempotencyKey || crypto.randomUUID());
+    return this.mp.request('POST', '/payments/payouts/initiate', body, undefined, idempotencyKey || crypto.randomUUID());
   }
   list(query?: { page?: number; limit?: number; status?: string }) {
     return this.mp.request('GET', '/payouts', undefined, query);
@@ -269,6 +305,65 @@ class BalancesResource {
 
   summary() {
     return this.mp.request('GET', '/balances/summary');
+  }
+}
+
+class BillingPlansResource {
+  constructor(private mp: MoneyPulse) {}
+
+  create(input: BillingPlanInput) {
+    return this.mp.request('POST', '/billing/plans', input);
+  }
+  list(query?: { includeInactive?: boolean }) {
+    return this.mp.request('GET', '/billing/plans', undefined, query ? { includeInactive: query.includeInactive } : undefined);
+  }
+  deactivate(id: string) {
+    return this.mp.request('DELETE', `/billing/plans/${encodeURIComponent(id)}`);
+  }
+}
+
+class BillingCustomersResource {
+  constructor(private mp: MoneyPulse) {}
+
+  upsert(input: BillingCustomerInput) {
+    return this.mp.request('POST', '/billing/customers', input);
+  }
+}
+
+class BillingSubscriptionsResource {
+  constructor(private mp: MoneyPulse) {}
+
+  /** Retourne { subscription, invoice, checkoutUrl } -- checkoutUrl est le lien de paiement hébergé à présenter à l'utilisateur final (aucun débit automatique n'existe côté Money-Pulse). */
+  create(input: { billingCustomerId: string; planCode: string }) {
+    return this.mp.request('POST', '/billing/subscriptions', input);
+  }
+  /** atPeriodEnd (défaut true) : l'abonnement reste actif jusqu'à la fin de la période en cours plutôt que d'être coupé immédiatement. */
+  cancel(id: string, opts?: { atPeriodEnd?: boolean; reason?: string }) {
+    return this.mp.request('POST', `/billing/subscriptions/${encodeURIComponent(id)}/cancel`, opts ?? {});
+  }
+}
+
+class BillingUsageResource {
+  constructor(private mp: MoneyPulse) {}
+
+  /** Enregistre un relevé d'usage (ex. commission sur une vente) qui sera agrégé à la prochaine facture de l'abonnement concerné. */
+  record(input: BillingUsageInput) {
+    return this.mp.request('POST', '/billing/usage', input);
+  }
+}
+
+/** Facturation récurrente : abonnements + usage pour les utilisateurs finaux de votre application. */
+class BillingResource {
+  plans: BillingPlansResource;
+  customers: BillingCustomersResource;
+  subscriptions: BillingSubscriptionsResource;
+  usage: BillingUsageResource;
+
+  constructor(mp: MoneyPulse) {
+    this.plans = new BillingPlansResource(mp);
+    this.customers = new BillingCustomersResource(mp);
+    this.subscriptions = new BillingSubscriptionsResource(mp);
+    this.usage = new BillingUsageResource(mp);
   }
 }
 
